@@ -390,10 +390,10 @@ async function getValidAccessToken(env, source) {
   /* refresh */
   const cfg = adapter.oauth || {};
   if (!tokens.refresh_token || !cfg.tokenUrl) { const e = new Error('cannot refresh'); e.status = 401; throw e; }
-  const res = await fetch(cfg.tokenUrl, tokenRequestInit(cfg, {
+  const res = await fetch(cfg.tokenUrl, { ...tokenRequestInit(cfg, {
     grant_type: 'refresh_token',
     refresh_token: tokens.refresh_token
-  }, env));
+  }, env), signal: AbortSignal.timeout(15000) });
   if (!res.ok) {
     /* refresh failed: force a reconnect rather than silently serving stale data */
     const e = new Error('refresh failed'); e.status = 401; throw e;
@@ -428,7 +428,7 @@ function makeHelpers(env, source) {
         if (useAuth && ADAPTERS[source].auth === 'oauth') {
           headers.set('Authorization', 'Bearer ' + await getValidAccessToken(env, source));
         }
-        return fetch(url, { ...(init || {}), headers });
+        return fetch(url, { ...(init || {}), headers, signal: AbortSignal.timeout(15000) });
       };
       let res = await doFetch();
       if (res.status === 401 && useAuth && ADAPTERS[source].auth === 'oauth') {
@@ -650,11 +650,11 @@ async function authCallback(env, source, url) {
   }
   await env.TOKENS.delete('oauthstate:' + source);
   const redirectUri = url.origin + '/auth/' + source + '/callback';
-  const res = await fetch(cfg.tokenUrl, tokenRequestInit(cfg, {
+  const res = await fetch(cfg.tokenUrl, { ...tokenRequestInit(cfg, {
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri
-  }, env));
+  }, env), signal: AbortSignal.timeout(15000) });
   if (!res.ok) {
     return new Response('The connection couldn’t be finished (the tool said no: ' + res.status + '). Your AI will check the app settings - the usual cause is a redirect address that doesn’t match exactly.', { status: 502 });
   }
@@ -860,10 +860,23 @@ async function apiMetrics(env, url) {
     if (cached) { try { data = JSON.parse(cached); } catch (e) { data = null; } }
   }
   if (!data) {
+    /* Resolve/refresh each OAuth source's access token ONCE, serially,
+       before doing anything in parallel below. Xero (and most OAuth
+       providers) issue a SINGLE-USE refresh token that rotates every time
+       it's used - if the token happens to be near expiry, firing several
+       parallel requests at the same source would each try to refresh with
+       the same now-stale refresh token, and only one can win. Warming it up
+       here means every parallel fetch below just reads an already-valid
+       token from storage instead of racing to refresh it itself. */
+    for (const source of ['accounting', 'pos', 'rostering']) {
+      const adapter = ADAPTERS[source];
+      if (adapter && adapter.configured && adapter.auth === 'oauth') {
+        try { await getValidAccessToken(env, source); } catch (e) { /* per-source fetch below will surface this as unavailable */ }
+      }
+    }
     /* The three period slots and the trend series are all independent
        provider calls - run them in parallel rather than one after another
-       (sequential awaits here were the main cause of a slow/stuck first
-       load, especially with a live OAuth source like Xero). */
+       (sequential awaits here were the original cause of a slow first load). */
     const [curOut, prevOut, yoyOut, trendOut] = await Promise.all([
       fetchSlot(env, { ...base, ...cur }),
       prev ? fetchSlot(env, { ...base, ...prev }) : Promise.resolve(null),
