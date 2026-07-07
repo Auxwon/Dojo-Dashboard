@@ -227,7 +227,19 @@ function xeroPLPeriods(reportJson, count) {
   const cogs = new Array(count).fill(null);
   const opex = new Array(count).fill(null);
   const wagesSuper = new Array(count).fill(0);
-  const wageRe = /wages|salaries|superannuation|super|payroll|annual leave|long service|workcover/i;
+  const wageRe = /wages|salaries|superannuation|\bsuper\b|payroll|annual leave|long service|workcover/i;
+  /* Match by the row's own LABEL text, not the enclosing Section's Title.
+     Some organisations run a customised Profit & Loss layout (account
+     groups renamed/regrouped, e.g. wages sitting under a "Staff Costs"
+     sub-group rather than directly under "Operating Expenses", or the
+     Income/Cost of Sales breakdown collapsed to a single "Gross Profit"
+     line for a period with no matching transactions) - Section.Title is
+     often blank in that case, but the SummaryRow/Row labels are still the
+     standard Xero wording, so matching on those is what actually survives
+     a custom layout. */
+  const incomeTotalRe = /^total (income|revenue|trading income)$/i;
+  const cogsTotalRe = /^total cost of sales$/i;
+  const opexTotalRe = /^total operating expenses$/i;
   function nums(cells) {
     const out = [];
     for (let i = 1; i <= count; i++) {
@@ -237,33 +249,38 @@ function xeroPLPeriods(reportJson, count) {
     }
     return out;
   }
+  /* Sections whose own total IS the Income or Cost of Sales total are
+     excluded from the wage-keyword scan, so a line item that happens to
+     sit inside one of those (rather than Operating Expenses) is never
+     double-counted into wagesSuper. */
   for (const section of rows) {
     if (!section || section.RowType !== 'Section') continue;
-    const title = (section.Title || '').toLowerCase();
     const sectionRows = section.Rows || [];
-    if (title === 'income' || title === 'revenue' || title === 'trading income') {
-      const summary = sectionRows.find((r) => r.RowType === 'SummaryRow');
-      if (summary) nums(summary.Cells).forEach((v, i) => { revenue[i] = v; });
-    } else if (title === 'cost of sales') {
-      const summary = sectionRows.find((r) => r.RowType === 'SummaryRow');
-      if (summary) nums(summary.Cells).forEach((v, i) => { cogs[i] = v; });
-    } else if (title === 'operating expenses' || title === 'expenses' || title === 'less operating expenses') {
-      const summary = sectionRows.find((r) => r.RowType === 'SummaryRow');
-      if (summary) nums(summary.Cells).forEach((v, i) => { opex[i] = v; });
-      for (const r of sectionRows) {
-        if (r.RowType === 'Row' && r.Cells && r.Cells[0] && wageRe.test(r.Cells[0].Value || '')) {
-          nums(r.Cells).forEach((v, i) => { wagesSuper[i] += v; });
-        }
+    const summaryRows = sectionRows.filter((r) => r.RowType === 'SummaryRow');
+    let isIncomeOrCogsSection = false;
+    for (const summary of summaryRows) {
+      const label = (summary.Cells && summary.Cells[0] && summary.Cells[0].Value) || '';
+      if (incomeTotalRe.test(label)) { nums(summary.Cells).forEach((v, i) => { revenue[i] = v; }); isIncomeOrCogsSection = true; }
+      else if (cogsTotalRe.test(label)) { nums(summary.Cells).forEach((v, i) => { cogs[i] = v; }); isIncomeOrCogsSection = true; }
+      else if (opexTotalRe.test(label)) { nums(summary.Cells).forEach((v, i) => { opex[i] = v; }); }
+    }
+    if (isIncomeOrCogsSection) continue;
+    for (const r of sectionRows) {
+      if (r.RowType === 'Row' && r.Cells && r.Cells[0] && wageRe.test(r.Cells[0].Value || '')) {
+        nums(r.Cells).forEach((v, i) => { wagesSuper[i] += v; });
       }
     }
   }
   const out = [];
   for (let i = 0; i < count; i++) {
     out.push({
-      revenue: revenue[i],
-      cogs: cogs[i],
+      /* No Income/Cost of Sales section at all (Xero collapses them to a
+         single Gross Profit line when a period has no matching transactions)
+         means nothing traded that period, not "not configured" - a real $0. */
+      revenue: revenue[i] != null ? revenue[i] : 0,
+      cogs: cogs[i] != null ? cogs[i] : 0,
       wagesSuper: wagesSuper[i],
-      overheads: opex[i] != null ? opex[i] - wagesSuper[i] : null
+      overheads: opex[i] != null ? opex[i] - wagesSuper[i] : 0
     });
   }
   return out;
