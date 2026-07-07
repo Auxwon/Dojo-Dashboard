@@ -150,12 +150,62 @@ const ADAPTERS = {
      connect.squareupsandbox.com.
   */
   pos: {
-    configured: false,
+    /* Lightspeed Restaurant (K-Series, formerly Kounta): live API access is
+       reserved for approved partners/merchants (capability-matrix.md) - the
+       owner has requested it from their account manager but it hasn't landed
+       yet. Fallback ladder rung: the owner's own Sales Summary report (Date +
+       Number of Sales, already grouped per day) pasted into a text file and
+       uploaded here. Never a dollar figure from this source - count only. */
+    configured: true,
     auth: null,
     oauth: {},
-    async status(env, h) { return { connected: false }; },
-    async fetchRange(env, h, q) { throw new NotConfigured('pos'); },
-    async fetchMonthly(env, h, q) { throw new NotConfigured('pos'); }
+    mode: 'export',
+    async status(env, h) {
+        const to = new Date().toISOString().slice(0, 10);
+        const fromD = new Date(); fromD.setUTCDate(fromD.getUTCDate() - 400);
+        const from = fromD.toISOString().slice(0, 10);
+        const { daysWithData } = await h.readIngested(from, to);
+        return { connected: daysWithData > 0 };
+    },
+    async fetchRange(env, h, q) {
+      const { sums } = await h.readIngested(q.from, q.to);
+      return { count: sums.count || 0 };
+    },
+    async fetchMonthly(env, h, q) {
+      const { months, byMonth } = await h.monthlyIngested(q.fromMonth, q.toMonth);
+      return { months, count: byMonth.map((m) => (m ? (m.count || 0) : null)) };
+    },
+    /* Turns the pasted/exported Sales Summary table into day rows. Tolerant
+       of tab-separated (pasting an HTML table into a plain text editor),
+       comma-separated (a real CSV export), or column-aligned text; date as
+       'DD Mon YYYY' (Kounta/Lightspeed's own format), 'DD/MM/YYYY', or
+       'YYYY-MM-DD'. Skips the header row and the TOTAL row. */
+    async parseExport(env, h, raw) {
+      const text = (raw && raw.text) || '';
+      const monthMap = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+      const rows = [];
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || /^date\b/i.test(line) || /^total\b/i.test(line)) continue;
+        const parts = line.split(/\t+|,|\s{2,}/).map((p) => p.trim()).filter((p) => p.length);
+        if (parts.length < 2) continue;
+        const dateStr = parts[0];
+        let iso = null, m;
+        if ((m = /^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/.exec(dateStr))) {
+          const mon = monthMap[m[2].slice(0, 3).toLowerCase()];
+          if (mon) iso = m[3] + '-' + String(mon).padStart(2, '0') + '-' + String(parseInt(m[1], 10)).padStart(2, '0');
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          iso = dateStr;
+        } else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(dateStr))) {
+          iso = m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+        }
+        if (!iso) continue;
+        const count = parseInt(String(parts[1]).replace(/[^0-9.-]/g, ''), 10);
+        if (!isFinite(count)) continue;
+        rows.push({ date: iso, count });
+      }
+      return rows;
+    }
   },
 
   /* >>> ADAPTER 3: ROSTERING (optional - only if the owner has one)
