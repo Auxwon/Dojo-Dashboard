@@ -735,6 +735,14 @@ async function sourceStatus(env, source) {
   }
 }
 
+/* TEMP DIAGNOSTIC (build-time only - remove once Xero fetchRange is verified):
+   fetchSlot swallows per-source errors so a single bad fetch never breaks the
+   payload. That's correct for the owner, but it also means real errors are
+   invisible while wiring an adapter. Stash the last one here and surface it
+   in /api/metrics as a `debug` field so it can be read from the browser
+   without needing Cloudflare log access. Harmless extra JSON key - the
+   dashboard page ignores fields it doesn't know about. */
+const LAST_FETCH_ERR = {};
 async function fetchSlot(env, q) {
   /* One period slot: pull each configured source; null where unavailable. */
   const out = {};
@@ -747,6 +755,7 @@ async function fetchSlot(env, q) {
       await noteSync(env, source);
     } catch (err) {
       out[source] = null; /* per-source failure never breaks the whole payload */
+      LAST_FETCH_ERR[source] = { message: String(err && err.message), status: err && err.status, stack: (err && err.stack) ? String(err.stack).split('\n').slice(0, 4).join(' | ') : null };
     }
   }
   return out;
@@ -816,7 +825,8 @@ async function apiMetrics(env, url) {
     protected: true,
     sources: { accounting: sAcc, pos: sPos, rostering: sRos },
     periods: data.periods,
-    trend: data.trend
+    trend: data.trend,
+    debug: LAST_FETCH_ERR /* TEMP - remove once Xero fetchRange is verified */
   });
 }
 
