@@ -5,7 +5,7 @@
 # the owner's Cloudflare yourself). The owner never edits this file.
 # ============================================================================
 
-name = "Dojo-Dashboard"          # SET to the GitHub REPO name before first push - sets the URL and must match the repo (else Workers Builds opens a reconciling PR)
+name = "dojo-dashboard"          # SET to the GitHub REPO name before first push - sets the URL and must match the repo (else Workers Builds opens a reconciling PR)
 main = "worker.js"
 compatibility_date = "2026-06-01"
 

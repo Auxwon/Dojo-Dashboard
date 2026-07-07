@@ -1,5 +1,5 @@
 {
-  "name": "Dojo-Dashboard",
+  "name": "dojo-dashboard",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
