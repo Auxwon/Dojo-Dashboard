@@ -109,20 +109,7 @@ const ADAPTERS = {
         headers: { 'Xero-Tenant-Id': tenantId, Accept: 'application/json' }
       });
       const m = xeroPLPeriods(rep, 1)[0];
-      if (!m || m.revenue == null) {
-        /* TEMP DIAGNOSTIC: capture what Xero actually returned so the section
-           titles can be checked against the keyword match above. Remove once verified. */
-        const e = new NotConfigured('accounting');
-        try {
-          const rows = (rep && rep.Reports && rep.Reports[0] && rep.Reports[0].Rows) || [];
-          e.debug = {
-            reportName: rep && rep.Reports && rep.Reports[0] && rep.Reports[0].ReportName,
-            topLevel: rows.map((r) => ({ RowType: r.RowType, Title: r.Title })),
-            raw: JSON.stringify(rep).slice(0, 3000)
-          };
-        } catch (e2) { e.debug = { note: 'could not summarise response' }; }
-        throw e;
-      }
+      if (!m) throw new NotConfigured('accounting');
       return {
         revenue: m.revenue,
         cogs: m.cogs || 0,
@@ -765,14 +752,6 @@ async function sourceStatus(env, source) {
   }
 }
 
-/* TEMP DIAGNOSTIC (build-time only - remove once Xero fetchRange is verified):
-   fetchSlot swallows per-source errors so a single bad fetch never breaks the
-   payload. That's correct for the owner, but it also means real errors are
-   invisible while wiring an adapter. Stash the last one here and surface it
-   in /api/metrics as a `debug` field so it can be read from the browser
-   without needing Cloudflare log access. Harmless extra JSON key - the
-   dashboard page ignores fields it doesn't know about. */
-const LAST_FETCH_ERR = {};
 async function fetchSlot(env, q) {
   /* One period slot: pull each configured source; null where unavailable. */
   const out = {};
@@ -785,7 +764,6 @@ async function fetchSlot(env, q) {
       await noteSync(env, source);
     } catch (err) {
       out[source] = null; /* per-source failure never breaks the whole payload */
-      LAST_FETCH_ERR[source] = { message: String(err && err.message), status: err && err.status, stack: (err && err.stack) ? String(err.stack).split('\n').slice(0, 4).join(' | ') : null, debug: (err && err.debug) || null };
     }
   }
   return out;
@@ -855,8 +833,7 @@ async function apiMetrics(env, url) {
     protected: true,
     sources: { accounting: sAcc, pos: sPos, rostering: sRos },
     periods: data.periods,
-    trend: data.trend,
-    debug: LAST_FETCH_ERR /* TEMP - remove once Xero fetchRange is verified */
+    trend: data.trend
   });
 }
 
